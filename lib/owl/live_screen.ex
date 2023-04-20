@@ -201,6 +201,8 @@ defmodule Owl.LiveScreen do
 
     terminal_device? = not is_nil(get_terminal_width(terminal_width, device))
 
+    send(self(), :gets)
+
     if terminal_device? do
       {:ok, init_state(terminal_width, refresh_every, device)}
     else
@@ -210,6 +212,7 @@ defmodule Owl.LiveScreen do
 
   defp init_state(terminal_width, refresh_every, device) do
     %{
+      first_render?: true,
       device: device,
       timer_ref: nil,
       notify_on_next_render: [],
@@ -315,6 +318,24 @@ defmodule Owl.LiveScreen do
     {:noreply, state}
   end
 
+  def handle_info(:gets, state) do
+    me = self()
+
+    Task.async(fn ->
+      Owl.IO.puts("getting")
+      content = IO.gets("")
+      IO.write(["\r", IO.ANSI.cursor_up(3), IO.ANSI.cursor_right(2)])
+      send(me, {:got, content})
+    end)
+
+    {:noreply, state}
+  end
+
+  def handle_info({:got, msg}, state) do
+    Owl.IO.puts(msg)
+    {:noreply, state}
+  end
+
   def handle_info(_message, state) do
     {:noreply, state}
   end
@@ -333,6 +354,11 @@ defmodule Owl.LiveScreen do
 
   defp io_request(from, reply_as, {:put_chars, _encoding, mod, fun, args}, state) do
     put_chars(from, reply_as, apply(mod, fun, args), state)
+  end
+
+  defp io_request(from, reply_as, {:get_line, prompt}, state) do
+    Owl.IO.inspect({from, reply_as, prompt})
+    {{:error, :enotsup}, state}
   end
 
   defp io_request(from, reply_as, req, state) do
@@ -429,8 +455,32 @@ defmodule Owl.LiveScreen do
       |> Enum.reject(&(&1 == []))
       |> Owl.Data.unlines()
 
+    # data = [
+    #   if(state.first_render?,
+    #     do: [IO.ANSI.clear(), IO.ANSI.home()],
+    #     else: ["\e7", IO.ANSI.cursor_down(1), "\r"]
+    #   ),
+    #   data,
+    #   if(state.first_render?,
+    #     do: ["\e7"],
+    #     else: ["\e8"]
+    #   )
+    # ]
+    data = [
+      if(state.first_render?,
+        do: [IO.ANSI.clear(), IO.ANSI.home()],
+        else: "\e7"
+      ),
+      "\r",
+      data,
+      if(state.first_render?,
+        do: ["\r", IO.ANSI.cursor_right(2)],
+        else: "\e8"
+      )
+    ]
+
     if data != [] do
-      Owl.IO.puts(data, state.device)
+      Owl.IO.write(data, state.device)
       io_reply.()
     end
 
@@ -438,7 +488,7 @@ defmodule Owl.LiveScreen do
       send(pid, :rendered)
     end
 
-    %{state | block_states: %{}, notify_on_next_render: []}
+    %{state | block_states: %{}, notify_on_next_render: [], first_render?: false}
   end
 
   defp get_content(state, block_id, terminal_width) do

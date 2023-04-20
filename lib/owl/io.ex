@@ -535,6 +535,16 @@ defmodule Owl.IO do
   end
 
   @doc """
+  Wrapper around `IO.write/2` that accepts `t:Owl.Data.t/0`.
+  """
+  @spec write(Owl.Data.t(), device :: IO.device()) :: :ok
+  def write(data, device \\ :stdio) do
+    data = Owl.Data.to_ansidata(data)
+
+    IO.write(device, data)
+  end
+
+  @doc """
   Wrapper around `IO.puts/2` that accepts `t:Owl.Data.t/0`.
 
   The other difference is that `device` argument is moved to second argument.
