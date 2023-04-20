@@ -12,7 +12,7 @@ owl_width = 8
 
 width = 60
 height = 20
-colors = [:red, :yellow, :cyan, :blue, :green]
+colors = [:red, :yellow, :cyan, :blue, :green] |> Map.new(fn c -> {to_string(c), c} end)
 # two sides
 borders_size = 2
 
@@ -23,7 +23,7 @@ Owl.LiveScreen.add_block(:demo,
 
     state ->
       owl
-      |> Owl.Data.tag(state.owl_color)
+      |> Owl.Data.tag(state[:owl_color] || :cyan)
       |> Owl.Box.new(
         min_width: width,
         min_height: height,
@@ -31,13 +31,10 @@ Owl.LiveScreen.add_block(:demo,
         padding_left: state.padding_left
       )
       |> Owl.Data.tag(:magenta)
-  end
-)
-
-Owl.LiveScreen.add_block(:demo_input,
-  render: fn
-    _ ->
-      "> "
+  end,
+  on_input: fn input, state ->
+    color = Map.get(colors, input, :cyan)
+    Map.put(state, :owl_color, color)
   end
 )
 
@@ -47,8 +44,7 @@ Task.async(fn ->
       padding_top: 10,
       padding_left: 30,
       vertical_shift: 1,
-      horizontal_shift: -1,
-      owl_color: Enum.random(colors)
+      horizontal_shift: -1
     },
     fn state ->
       horizontal_shift =
@@ -69,23 +65,13 @@ Task.async(fn ->
             state.vertical_shift
         end
 
-      owl_color =
-        if vertical_shift != state.vertical_shift or horizontal_shift != state.horizontal_shift do
-          Enum.random(colors)
-        else
-          state.owl_color
-        end
-
       padding_left = state.padding_left + horizontal_shift
       padding_top = state.padding_top + vertical_shift
 
       Owl.LiveScreen.update(:demo, %{
         padding_left: padding_left,
-        padding_top: padding_top,
-        owl_color: owl_color
+        padding_top: padding_top
       })
-
-      # Owl.LiveScreen.update(:demo_input, :tick)
 
       Process.sleep(200)
 
@@ -93,8 +79,7 @@ Task.async(fn ->
         padding_left: padding_left,
         padding_top: padding_top,
         vertical_shift: vertical_shift,
-        horizontal_shift: horizontal_shift,
-        owl_color: owl_color
+        horizontal_shift: horizontal_shift
       }
     end
   )

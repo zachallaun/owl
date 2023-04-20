@@ -201,8 +201,6 @@ defmodule Owl.LiveScreen do
 
     terminal_device? = not is_nil(get_terminal_width(terminal_width, device))
 
-    send(self(), :gets)
-
     if terminal_device? do
       {:ok, init_state(terminal_width, refresh_every, device)}
     else
@@ -224,6 +222,7 @@ defmodule Owl.LiveScreen do
       content: %{},
       block_states: %{},
       render_functions: %{},
+      input_functions: %{},
       rendered_blocks: [],
       rendered_content_height: %{},
       blocks_to_add: []
@@ -246,6 +245,14 @@ defmodule Owl.LiveScreen do
         Process.send_after(self(), :render, state.refresh_every)
       else
         state.timer_ref
+      end
+
+    state =
+      if on_input = opts[:on_input] do
+        send(self(), :loop_gets)
+        %{state | input_functions: Map.put(state.input_functions, block_id, on_input)}
+      else
+        state
       end
 
     {:noreply,
@@ -274,7 +281,13 @@ defmodule Owl.LiveScreen do
     {:noreply,
      %{
        state
-       | block_states: Map.put(state.block_states, block_id, block_state)
+       | block_states:
+           Map.update(
+             state.block_states,
+             block_id,
+             block_state,
+             &Map.merge(&1 || %{}, block_state)
+           )
      }}
   end
 
@@ -318,21 +331,25 @@ defmodule Owl.LiveScreen do
     {:noreply, state}
   end
 
-  def handle_info(:gets, state) do
+  def handle_info(:loop_gets, %{input_functions: fns} = state) when map_size(fns) > 0 do
     me = self()
 
     Task.async(fn ->
-      Owl.IO.puts("getting")
-      content = IO.gets("")
-      IO.write(["\r", IO.ANSI.cursor_up(3), IO.ANSI.cursor_right(2)])
-      send(me, {:got, content})
+      input = IO.gets("")
+      IO.write(["\r", IO.ANSI.cursor_up(1), IO.ANSI.cursor_right(2), "\e[0K"])
+      send(me, {:on_input, String.trim(input)})
+      send(me, :loop_gets)
     end)
 
     {:noreply, state}
   end
 
-  def handle_info({:got, msg}, state) do
-    Owl.IO.puts(msg)
+  def handle_info({:on_input, content}, %{input_functions: fns} = state) when map_size(fns) > 0 do
+    for {block_id, fun} <- fns do
+      block_state = Map.fetch!(state.block_states, block_id)
+      update(block_id, fun.(content, block_state))
+    end
+
     {:noreply, state}
   end
 
@@ -356,7 +373,7 @@ defmodule Owl.LiveScreen do
     put_chars(from, reply_as, apply(mod, fun, args), state)
   end
 
-  defp io_request(from, reply_as, {:get_line, prompt}, state) do
+  defp io_request(from, reply_as, {:get_line, :unicode, prompt}, state) do
     Owl.IO.inspect({from, reply_as, prompt})
     {{:error, :enotsup}, state}
   end
@@ -455,29 +472,24 @@ defmodule Owl.LiveScreen do
       |> Enum.reject(&(&1 == []))
       |> Owl.Data.unlines()
 
-    # data = [
-    #   if(state.first_render?,
-    #     do: [IO.ANSI.clear(), IO.ANSI.home()],
-    #     else: ["\e7", IO.ANSI.cursor_down(1), "\r"]
-    #   ),
-    #   data,
-    #   if(state.first_render?,
-    #     do: ["\e7"],
-    #     else: ["\e8"]
-    #   )
-    # ]
-    data = [
-      if(state.first_render?,
-        do: [IO.ANSI.clear(), IO.ANSI.home()],
-        else: "\e7"
-      ),
-      "\r",
-      data,
-      if(state.first_render?,
-        do: ["\r", IO.ANSI.cursor_right(2)],
-        else: "\e8"
-      )
-    ]
+    data =
+      if state.input_functions == %{} do
+        data
+      else
+        [
+          if(state.first_render?,
+            do: [IO.ANSI.clear(), IO.ANSI.home()],
+            else: "\e7"
+          ),
+          "\r",
+          data,
+          "\n> ",
+          if(state.first_render?,
+            do: [],
+            else: "\e8"
+          )
+        ]
+      end
 
     if data != [] do
       Owl.IO.write(data, state.device)
@@ -488,7 +500,7 @@ defmodule Owl.LiveScreen do
       send(pid, :rendered)
     end
 
-    %{state | block_states: %{}, notify_on_next_render: [], first_render?: false}
+    %{state | notify_on_next_render: [], first_render?: false}
   end
 
   defp get_content(state, block_id, terminal_width) do
